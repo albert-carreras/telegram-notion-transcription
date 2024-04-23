@@ -19,6 +19,7 @@ audio_file = "input.wav"
 output_file = "output.wav"
 batch_size = 1
 compute_type = "int8"
+tts_model = "tts_models/en/ljspeech/tacotron2-DDC"
 
 
 @contextmanager
@@ -87,7 +88,7 @@ def play_audio(file_path):
 
 def main():
     with suppress_stdout_stderr():
-        tts = TTS("tts_models/en/ljspeech/tacotron2-DDC").to('cpu')
+        tts = TTS(tts_model).to(device)
         model = whisperx.load_model("base", device, compute_type=compute_type, language='en')
     conversation_manager = ConversationManager()
 
