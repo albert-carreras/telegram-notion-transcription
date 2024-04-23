@@ -38,7 +38,8 @@ def suppress_stdout_stderr():
 
 class ConversationManager:
     def __init__(self):
-        self.history = [{'role': 'system', 'content': ''}]
+        self.history = [{'role': 'system', 'content': """You are a friendly person that answers in short sentences.
+        You are having a casual conversation and you're interested in the person talking to you."""}]
 
     def add_user_message(self, message):
         self.history.append({'role': 'user', 'content': message})
@@ -62,7 +63,6 @@ def record_audio(sample_rate, channels):
     with sd.InputStream(samplerate=sample_rate, channels=channels, callback=callback):
         input()
 
-    print("--- Recording stopped. ---\n")
     return np.concatenate(recording)
 
 
@@ -95,16 +95,15 @@ def main():
         try:
             recording = record_audio(sample_rate, channels)
             write(audio_file, sample_rate, recording)
-            print("--- Loading into whisperX ---")
             audio = whisperx.load_audio(audio_file)
-            print("--- Transcribing ---")
+            print("--- WhisperX Transcribing ---")
             with suppress_stdout_stderr():
                 result = model.transcribe(audio, batch_size=batch_size)
 
             user_input = result["segments"][0]['text']
             conversation_manager.add_user_message(user_input)
 
-            print("--- Processing response ---")
+            print("--- LLM Generating ---")
             response_thread = threading.Thread(target=generate_response, args=(conversation_manager, tts))
             response_thread.start()
             response_thread.join()
@@ -115,12 +114,10 @@ def main():
                 break
         except Exception as e:
             print(f"An error occurred: {str(e)}")
-            print("Please try again.")
 
 
 def generate_response(conversation_manager, tts):
     try:
-        print(conversation_manager.get_history())
         response = ollama.chat(
             model='llama3',
             messages=conversation_manager.get_history(),
@@ -129,10 +126,10 @@ def generate_response(conversation_manager, tts):
         assistant_response = response['message']['content']
         conversation_manager.add_assistant_message(assistant_response)
 
-        print("--- Generating speech ---")
+        print("--- TTS Generating ---")
         with suppress_stdout_stderr():
             tts.tts_to_file(text=assistant_response, file_path=output_file, split_sentences=False, speed=1.4)
-        print("--- Playing back the response ---")
+        print("--- Response Playback ---")
         play_audio(output_file)
     except Exception as e:
         print(f"An error occurred during response generation: {str(e)}")
