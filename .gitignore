@@ -3,4 +3,5 @@
 .DS_Store
 /.venv/
 /venv/
-*.wav
+input.wav
+output.wav

@@ -17,9 +17,16 @@ channels = 1
 device = "cpu"
 audio_file = "input.wav"
 output_file = "output.wav"
+speaker_file = "female.wav"
 batch_size = 1
 compute_type = "int8"
-tts_model = "tts_models/en/ljspeech/tacotron2-DDC"
+
+# tts_model = "tts_models/en/jenny/jenny" # MEDIUM
+# tts_model = "tts_models/en/ljspeech/speedy-speech" # FAST
+# tts_model = "tts_models/en/ljspeech/tacotron2-DDC" # MEH
+# tts_model = "tts_models/en/ljspeech/glow-tts"
+# tts_model = "tts_models/en/ljspeech/neural_hmm"
+tts_model = "tts_models/multilingual/multi-dataset/xtts_v2" # BEST MODEL, set language='' in tts_to_file()
 
 
 @contextmanager
@@ -40,7 +47,8 @@ def suppress_stdout_stderr():
 class ConversationManager:
     def __init__(self):
         self.history = [{'role': 'system', 'content': """You are a friendly person that answers in short sentences.
-        You are having a casual conversation and you're interested in the person talking to you."""}]
+        You are having a casual conversation and you're interested in the person talking to you.
+        You never exceed 400 Tokens."""}]
 
     def add_user_message(self, message):
         self.history.append({'role': 'user', 'content': message})
@@ -52,7 +60,7 @@ class ConversationManager:
         return self.history
 
 
-def record_audio(sample_rate, channels):
+def record_audio():
     recording = []
 
     def callback(indata, frames, time, status):
@@ -87,14 +95,13 @@ def play_audio(file_path):
 
 
 def main():
-    with suppress_stdout_stderr():
-        tts = TTS(tts_model).to(device)
-        model = whisperx.load_model("base", device, compute_type=compute_type, language='en')
+    tts = TTS(tts_model).to(device)
+    model = whisperx.load_model("base", device, compute_type=compute_type, language='en')
     conversation_manager = ConversationManager()
 
     while True:
         try:
-            recording = record_audio(sample_rate, channels)
+            recording = record_audio()
             write(audio_file, sample_rate, recording)
             audio = whisperx.load_audio(audio_file)
             print("--- WhisperX Transcribing ---")
@@ -129,7 +136,8 @@ def generate_response(conversation_manager, tts):
 
         print("--- TTS Generating ---")
         with suppress_stdout_stderr():
-            tts.tts_to_file(text=assistant_response, file_path=output_file, split_sentences=False, speed=1.4)
+            tts.tts_to_file(text=assistant_response, file_path=output_file, language='en', speaker_wav=speaker_file,
+                            split_sentences=False)
         print("--- Response Playback ---")
         play_audio(output_file)
     except Exception as e:
