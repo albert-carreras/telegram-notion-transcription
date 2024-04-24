@@ -1,32 +1,19 @@
-import os
-import sys
-import threading
-import wave
+import os, sys
 from contextlib import contextmanager
 
 import numpy as np
 import ollama
-import pyaudio
 import sounddevice as sd
 import whisperx
-from TTS.api import TTS
+from styletts2 import tts
 from scipy.io.wavfile import write
 
-sample_rate = 44100
+sample_rate = 24000
 channels = 1
 device = "cpu"
 audio_file = "input.wav"
-output_file = "output.wav"
-speaker_file = "female.wav"
 batch_size = 1
 compute_type = "int8"
-
-# tts_model = "tts_models/en/jenny/jenny" # MEDIUM
-# tts_model = "tts_models/en/ljspeech/speedy-speech" # FAST
-# tts_model = "tts_models/en/ljspeech/tacotron2-DDC" # MEH
-# tts_model = "tts_models/en/ljspeech/glow-tts"
-# tts_model = "tts_models/en/ljspeech/neural_hmm"
-tts_model = "tts_models/multilingual/multi-dataset/xtts_v2" # BEST MODEL, set language='' in tts_to_file()
 
 
 @contextmanager
@@ -40,15 +27,19 @@ def suppress_stdout_stderr():
             yield
         finally:
             sys.stdout = old_stdout
-
             sys.stderr = old_stderr
+
+
+print("--- Starting, loading models ---")
+with suppress_stdout_stderr():
+    styletts = tts.StyleTTS2()
+    model = whisperx.load_model("base", device, compute_type=compute_type, language='en')
 
 
 class ConversationManager:
     def __init__(self):
         self.history = [{'role': 'system', 'content': """You are a friendly person that answers in short sentences.
-        You are having a casual conversation and you're interested in the person talking to you.
-        You never exceed 400 Tokens."""}]
+        You are having a casual conversation and you're interested in the person talking to you."""}]
 
     def add_user_message(self, message):
         self.history.append({'role': 'user', 'content': message})
@@ -65,66 +56,25 @@ def record_audio():
 
     def callback(indata, frames, time, status):
         if status:
-            print(status)
+            print("Recording Error:", status)
         recording.append(indata.copy())
 
     print("\n--- Recording started. Press Enter to stop recording. ---")
-    with sd.InputStream(samplerate=sample_rate, channels=channels, callback=callback):
-        input()
+    try:
+        with sd.InputStream(samplerate=sample_rate, channels=channels, callback=callback):
+            input()
+    except Exception as e:
+        print("An error occurred during recording:", e)
 
-    return np.concatenate(recording)
-
-
-def play_audio(file_path):
-    with wave.open(file_path, 'rb') as wf:
-        p = pyaudio.PyAudio()
-
-        stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
-                        channels=wf.getnchannels(),
-                        rate=wf.getframerate(),
-                        output=True)
-
-        data = wf.readframes(1024)
-        while data:
-            stream.write(data)
-            data = wf.readframes(1024)
-
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
+    return np.concatenate(recording) if recording else np.zeros((sample_rate, channels))
 
 
-def main():
-    tts = TTS(tts_model).to(device)
-    model = whisperx.load_model("base", device, compute_type=compute_type, language='en')
-    conversation_manager = ConversationManager()
-
-    while True:
-        try:
-            recording = record_audio()
-            write(audio_file, sample_rate, recording)
-            audio = whisperx.load_audio(audio_file)
-            print("--- WhisperX Transcribing ---")
-            with suppress_stdout_stderr():
-                result = model.transcribe(audio, batch_size=batch_size)
-
-            user_input = result["segments"][0]['text']
-            conversation_manager.add_user_message(user_input)
-
-            print("--- LLM Generating ---")
-            response_thread = threading.Thread(target=generate_response, args=(conversation_manager, tts))
-            response_thread.start()
-            response_thread.join()
-
-            print("\n--- Press Enter to continue the conversation or type 'q' to exit. ---")
-            user_choice = input().strip().lower()
-            if user_choice == 'q':
-                break
-        except Exception as e:
-            print(f"An error occurred: {str(e)}")
+def play_wav_array(wav_array):
+    sd.play(wav_array, samplerate=sample_rate, blocking=True)
+    sd.wait()
 
 
-def generate_response(conversation_manager, tts):
+def generate_response(conversation_manager):
     try:
         response = ollama.chat(
             model='llama3',
@@ -136,12 +86,43 @@ def generate_response(conversation_manager, tts):
 
         print("--- TTS Generating ---")
         with suppress_stdout_stderr():
-            tts.tts_to_file(text=assistant_response, file_path=output_file, language='en', speaker_wav=speaker_file,
-                            split_sentences=False)
+            wav = styletts.inference(assistant_response,
+                                     diffusion_steps=4)
         print("--- Response Playback ---")
-        play_audio(output_file)
+        play_wav_array(wav)
     except Exception as e:
         print(f"An error occurred during response generation: {str(e)}")
+
+
+def main():
+    conversation_manager = ConversationManager()
+
+    while True:
+        try:
+            recording = record_audio()
+
+            if not np.any(recording):
+                print("No audio recorded, please try again.")
+                continue
+            write(audio_file, sample_rate, recording)
+            audio = whisperx.load_audio(audio_file)
+            print("--- WhisperX Transcribing ---")
+            with suppress_stdout_stderr():
+                result = model.transcribe(audio, batch_size=batch_size)
+
+            user_input = result["segments"][0]['text'] if result["segments"] else "No speech detected."
+            conversation_manager.add_user_message(user_input)
+
+            print("--- LLM Generating ---")
+            generate_response(conversation_manager)
+
+            print("\n--- Press Enter to continue the conversation or type 'q' to exit ---")
+            user_choice = input().strip().lower()
+            if user_choice == 'q':
+                print("Exiting conversation")
+                break
+        except Exception as e:
+            print(f"An error occurred: {str(e)}")
 
 
 if __name__ == '__main__':
