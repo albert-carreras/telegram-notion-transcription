@@ -21,6 +21,8 @@ COMPUTE_TYPE = "int8"
 client = OpenAI(
     api_key=OPENAI_API_KEY,
 )
+
+
 @contextmanager
 def suppress_stdout_stderr():
     with open(os.devnull, "w") as devnull:
@@ -54,6 +56,19 @@ def transcribe_audio(audio_file):
         return "No speech detected."
 
 
+def create_rich_text_blocks(text):
+    chunks = [text[i:i+MAX_NOTION_BLOCK_LENGTH] for i in range(0, len(text), MAX_NOTION_BLOCK_LENGTH)]
+    return [
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": chunk}}]
+            }
+        } for chunk in chunks
+    ]
+
+
 def save_to_notion(transcription, raw):
     now = datetime.now()
 
@@ -69,11 +84,20 @@ def save_to_notion(transcription, raw):
     response_title = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an assistant that summarizes journal entries in a couple of sentences maximum. The summary is addressed to them, the user."},
+            {"role": "system", "content": "You are an assistant that summarizes journal entries in a couple of sentences maximum. The summary is addressed to them, the user. You just summarize the text, you don't add any other comments to it."},
             {"role": "user", "content": transcription}
         ]
     )
     summary = response_title.choices[0].message.content
+
+    response_evaluation = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an assistant that evaluates journal entries and gives a sentiment analysis. You just return a number representing your evaluation of the sentiment analysis. You use a scale from 1 to 100 on how positive, happy and optimistic the journal entry is. For reference, a 1 would be when something terrible happened, like a death. A 100 would be when something wonderful happened, like the birth of your first child. A 50 would be a normal, average day, routine, nothing special happened."},
+            {"role": "user", "content": transcription}
+        ]
+    )
+    sentiment = response_evaluation.choices[0].message.content.strip('\"')
 
     try:
         new_page = notion.pages.create(
@@ -83,16 +107,15 @@ def save_to_notion(transcription, raw):
                           "title": [{"type": "text", "text": {"content": title}}]},
                 "Date": {
                     "type": "date",
-                    "date": {"start": now.isoformat(), "end": None}}
+                    "date": {"start": now.isoformat(), "end": None}
+                },
+                "Sentiment": {
+                    "type": "number",
+                    "number": int(sentiment)
+                },
             },
             children=[
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [{"type": "text", "text": {"content": f"\n"}}]
-                    }
-                },
+                *create_rich_text_blocks(transcription),
                 {
                     "object": "block",
                     "type": "quote",
@@ -102,15 +125,8 @@ def save_to_notion(transcription, raw):
                                 "italic": True,
                             },
                             "type": "text",
-                            "text": {"content": f"{summary}"}
+                            "text": {"content": summary}
                         }]
-                    }
-                },
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [{"type": "text", "text": {"content": f"\n\n{transcription}\n\n"}}]
                     }
                 },
                 {
@@ -118,17 +134,9 @@ def save_to_notion(transcription, raw):
                     "type": "toggle",
                     "toggle": {
                         "rich_text": [{"type": "text", "text": {"content": "Raw Data"}}],
-                        "children": [
-                            {
-                                "object": "block",
-                                "type": "paragraph",
-                                "paragraph": {
-                                    "rich_text": [{"type": "text", "text": {"content": raw}}]
-                                }
-                            }
-                        ]
-                    }
-                }
+                        "children": create_rich_text_blocks(raw),
+                    },
+                },
             ]
         )
 
@@ -195,7 +203,6 @@ async def start(update, context):
 
 
 def main():
-
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
