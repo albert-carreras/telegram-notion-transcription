@@ -4,6 +4,8 @@ from datetime import datetime
 from contextlib import contextmanager
 
 import whisperx
+import requests
+
 from openai import OpenAI
 from telegram import Update
 from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandler, filters
@@ -15,7 +17,7 @@ SAMPLE_RATE = 24000
 CHANNELS = 1
 DEVICE = "cpu"
 AUDIO_FILE = "input.wav"
-BATCH_SIZE = 4
+BATCH_SIZE = 32
 COMPUTE_TYPE = "int8"
 
 client = OpenAI(
@@ -156,9 +158,18 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if message.voice:
         try:
             file = await context.bot.get_file(message.voice.file_id)
-            await file.download_to_drive(AUDIO_FILE)
+            try:
+                response = requests.get(file.file_path, timeout=30)  # 30 seconds timeout
+                response.raise_for_status()
+
+                with open("input.wav", 'wb') as f:
+                    f.write(response.content)
+
+            except Exception as e:
+                await update.message.reply_text(f"Error downloading file 1: {e}")
+                return
         except Exception as e:
-            await update.message.reply_text(f"Error downloading file: {e}")
+            await update.message.reply_text(f"Error downloading file 2: {e}")
             return
 
         try:
