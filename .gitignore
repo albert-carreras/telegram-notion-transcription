@@ -5,3 +5,4 @@
 /venv/
 input.wav
 output.wav
+.env

@@ -4,23 +4,34 @@ from datetime import datetime
 from contextlib import contextmanager
 
 import whisperx
+import requests
+
 from openai import OpenAI
 from telegram import Update
 from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandler, filters
 from notion_client import Client
 from notion_client.errors import APIResponseError
+from dotenv import load_dotenv
 
-# Constants
+load_dotenv()
+
 SAMPLE_RATE = 24000
 CHANNELS = 1
 DEVICE = "cpu"
 AUDIO_FILE = "input.wav"
-BATCH_SIZE = 4
+BATCH_SIZE = 4 
 COMPUTE_TYPE = "int8"
+MAX_NOTION_BLOCK_LENGTH = 2000
 
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+NOTION_TOKEN = os.getenv("NOTION_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+NOTION_JOURNAL_PAGE_ID = os.getenv("NOTION_JOURNAL_PAGE_ID")
 client = OpenAI(
     api_key=OPENAI_API_KEY,
 )
+
+
 @contextmanager
 def suppress_stdout_stderr():
     with open(os.devnull, "w") as devnull:
@@ -37,7 +48,7 @@ def suppress_stdout_stderr():
 
 print("Loading WhisperX model...")
 with suppress_stdout_stderr():
-    whisper_model = whisperx.load_model("large-v3", DEVICE, compute_type=COMPUTE_TYPE, language="en", threads=8)
+    whisper_model = whisperx.load_model("large-v3", DEVICE, compute_type=COMPUTE_TYPE, language="en", threads=12)
 
 notion = Client(auth=NOTION_TOKEN)
 
@@ -54,13 +65,26 @@ def transcribe_audio(audio_file):
         return "No speech detected."
 
 
+def create_rich_text_blocks(text):
+    chunks = [text[i:i+MAX_NOTION_BLOCK_LENGTH] for i in range(0, len(text), MAX_NOTION_BLOCK_LENGTH)]
+    return [
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": chunk}}]
+            }
+        } for chunk in chunks
+    ]
+
+
 def save_to_notion(transcription, raw):
     now = datetime.now()
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an assistant that generates concise, meaningful titles for journal entries based on their content."},
+            {"role": "system", "content": "You are an assistant that generates concise, meaningful titles for journal entries based on their content. It's a journal entry and it will be on a list of many other journal entries, therefore make the title recognizable, don't use words that can be often used with journal entries as this will make the titles repetitive."},
             {"role": "user", "content": transcription}
         ]
     )
@@ -69,11 +93,20 @@ def save_to_notion(transcription, raw):
     response_title = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an assistant that summarizes journal entries in a couple of sentences maximum. The summary is addressed to them, the user."},
+            {"role": "system", "content": "You are an assistant that summarizes journal entries in a couple of sentences maximum. The summary is addressed to them, the user. You just summarize the text, you don't add any other comments to it."},
             {"role": "user", "content": transcription}
         ]
     )
     summary = response_title.choices[0].message.content
+
+    response_evaluation = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an assistant that evaluates journal entries and gives a sentiment analysis. You just return a number representing your evaluation of the sentiment analysis. You use a scale from 1 to 100 on how positive, happy and optimistic the journal entry is. For reference, a 1 would be when something terrible happened, like a death. A 100 would be when something wonderful happened, like the birth of your first child. A 50 would be a normal, average day, routine, nothing special happened."},
+            {"role": "user", "content": transcription}
+        ]
+    )
+    sentiment = response_evaluation.choices[0].message.content.strip('\"')
 
     try:
         new_page = notion.pages.create(
@@ -83,16 +116,15 @@ def save_to_notion(transcription, raw):
                           "title": [{"type": "text", "text": {"content": title}}]},
                 "Date": {
                     "type": "date",
-                    "date": {"start": now.isoformat(), "end": None}}
+                    "date": {"start": now.isoformat(), "end": None}
+                },
+                "Sentiment": {
+                    "type": "number",
+                    "number": int(sentiment)
+                },
             },
             children=[
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [{"type": "text", "text": {"content": f"\n"}}]
-                    }
-                },
+                *create_rich_text_blocks(transcription),
                 {
                     "object": "block",
                     "type": "quote",
@@ -102,15 +134,8 @@ def save_to_notion(transcription, raw):
                                 "italic": True,
                             },
                             "type": "text",
-                            "text": {"content": f"{summary}"}
+                            "text": {"content": summary}
                         }]
-                    }
-                },
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [{"type": "text", "text": {"content": f"\n\n{transcription}\n\n"}}]
                     }
                 },
                 {
@@ -118,17 +143,9 @@ def save_to_notion(transcription, raw):
                     "type": "toggle",
                     "toggle": {
                         "rich_text": [{"type": "text", "text": {"content": "Raw Data"}}],
-                        "children": [
-                            {
-                                "object": "block",
-                                "type": "paragraph",
-                                "paragraph": {
-                                    "rich_text": [{"type": "text", "text": {"content": raw}}]
-                                }
-                            }
-                        ]
-                    }
-                }
+                        "children": create_rich_text_blocks(raw),
+                    },
+                },
             ]
         )
 
@@ -148,9 +165,18 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if message.voice:
         try:
             file = await context.bot.get_file(message.voice.file_id)
-            await file.download_to_drive(AUDIO_FILE)
+            try:
+                response = requests.get(file.file_path, timeout=30)  # 30 seconds timeout
+                response.raise_for_status()
+
+                with open("input.wav", 'wb') as f:
+                    f.write(response.content)
+
+            except Exception as e:
+                await update.message.reply_text(f"Error downloading file 1: {e}")
+                return
         except Exception as e:
-            await update.message.reply_text(f"Error downloading file: {e}")
+            await update.message.reply_text(f"Error downloading file 2: {e}")
             return
 
         try:
@@ -181,7 +207,7 @@ def cleanup_with_gpt4o_mini(text):
         model="gpt-4o-mini",
         messages=[
             {"role": "system",
-             "content": "You are an assistant that proofreads and cleans up text. You may correct grammar, spelling, and punctuation, but you will not change the meaning of the text. Only respond with the cleaned-up text."},
+             "content": "You are an assistant that proofreads and cleans up text. You may only correct grammar, spelling, and punctuation, but you will not change the meaning of the text whatsoever. Only respond with the cleaned-up text."},
             {"role": "user", "content": text}
         ]
     )
@@ -195,7 +221,6 @@ async def start(update, context):
 
 
 def main():
-
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
