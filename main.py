@@ -9,13 +9,12 @@ import requests
 
 from openai import OpenAI
 from telegram import Update
-from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandler, filters, Updater
 from notion_client import Client
 from notion_client.errors import APIResponseError
 from dotenv import load_dotenv
-from httpx import Limits, Timeout
 
-REMINDER_TIME = time(hour=20, minute=10)
+REMINDER_TIME = time(hour=20, minute=14)
 
 load_dotenv()
 
@@ -297,29 +296,31 @@ async def start(update):
         "Welcome! Send me a voice message and I'll transcribe it and save it to your Notion journal.")
 
 def main():
-    application = (
-        Application.builder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .concurrent_updates(True)
-        .httpx_client_kwargs(
-            limits=Limits(max_connections=32),
-            timeout = Timeout(connect=10.0, read=10.0, write=10.0, pool=10.0)
-        )
-        .build()
+    updater = Updater(
+        TELEGRAM_BOT_TOKEN,
+        request_kwargs={
+            'read_timeout': 10,
+            'connect_timeout': 10,
+            'pool_timeout': 10,
+        },
     )
 
+    dispatcher = updater.dispatcher
+
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.job_queue.run_daily(
         send_daily_reminder,
         REMINDER_TIME,
         days=(0, 1, 2, 3, 4, 5, 6)
     )
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_image))
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
+    dispatcher.add_handler(MessageHandler(filters.PHOTO, handle_image))
 
     print("Bot is running. Send a voice message to transcribe and save to Notion.")
-    application.run_polling()
+    updater.start_polling()
+    updater.idle()
 
 
 if __name__ == "__main__":
