@@ -272,7 +272,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "Describe this image as if it were a journal entry."},
+                            {"type": "text", "text": "Describe this image as if it were a concise journal entry. Keep it to two or three sentences maximum."},
                             {"type": "image_url", "image_url": {"url": image_url}},
                         ],
                     }
@@ -317,7 +317,6 @@ def main():
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
         .concurrent_updates(True)
-        .httpx_kwargs({"timeout": 60.0})
         .build()
     )
 
