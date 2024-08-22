@@ -94,7 +94,7 @@ def create_rich_text_blocks(text):
     ]
 
 
-def save_to_notion(transcription, raw, image_url=None):
+def save_to_notion(transcription, image_url=None):
     now = datetime.now()
 
     response = client.chat.completions.create(
@@ -181,14 +181,6 @@ def save_to_notion(transcription, raw, image_url=None):
                         }]
                     }
                 },
-                {
-                    "object": "block",
-                    "type": "toggle",
-                    "toggle": {
-                        "rich_text": [{"type": "text", "text": {"content": "Raw Data"}}],
-                        "children": create_rich_text_blocks(raw),
-                    },
-                },
             ]
         )
 
@@ -230,13 +222,12 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         try:
-            raw = transcription
             transcription = cleanup_with_gpt4o_mini(transcription)
         except Exception as e:
             await update.message.reply_text(f"Error cleaning up text with GPT-4o mini: {e}")
             return
 
-        success, url = save_to_notion(transcription, raw)
+        success, url = save_to_notion(transcription)
 
         if success:
             await update.message.reply_text(f"Saved: {url}")
