@@ -294,6 +294,7 @@ def main():
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
         .concurrent_updates(True)
+        .enable_job_queue()
         .build()
     )
 
