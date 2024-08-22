@@ -1,6 +1,5 @@
 import os
 import sys
-import asyncio
 
 from datetime import datetime, time
 from contextlib import contextmanager
@@ -14,8 +13,9 @@ from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandl
 from notion_client import Client
 from notion_client.errors import APIResponseError
 from dotenv import load_dotenv
+from httpx import Limits, Timeout
 
-REMINDER_TIME = time(hour=19, minute=59)
+REMINDER_TIME = time(hour=20, minute=10)
 
 load_dotenv()
 
@@ -106,16 +106,6 @@ def save_to_notion(transcription, raw, image_url=None):
     )
     title = response.choices[0].message.content.strip('\"')
 
-    response_title = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system",
-             "content": "You are an assistant that summarizes journal entries in a couple of sentences maximum. The summary is addressed to them, the user. You just summarize the text, you don't add any other comments to it."},
-            {"role": "user", "content": transcription}
-        ]
-    )
-    summary = response_title.choices[0].message.content
-
     response_evaluation = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -126,22 +116,55 @@ def save_to_notion(transcription, raw, image_url=None):
     )
     sentiment = response_evaluation.choices[0].message.content.strip('\"')
 
-    try:
-        new_page = notion.pages.create(
-            parent={"database_id": NOTION_JOURNAL_PAGE_ID},
-            properties={
-                "Title": {"type": "title",
-                          "title": [{"type": "text", "text": {"content": title}}]},
-                "Date": {
-                    "type": "date",
-                    "date": {"start": now.isoformat(), "end": None}
-                },
-                "Sentiment": {
-                    "type": "number",
-                    "number": int(sentiment)
-                },
+    new_page = notion.pages.create(
+        parent={"database_id": NOTION_JOURNAL_PAGE_ID},
+        properties={
+            "Title": {"type": "title",
+                      "title": [{"type": "text", "text": {"content": title}}]},
+            "Date": {
+                "type": "date",
+                "date": {"start": now.isoformat(), "end": None}
             },
+            "Sentiment": {
+                "type": "number",
+                "number": int(sentiment)
+            },
+        }
+    )
+
+    if image_url:
+        notion.blocks.children.append(
+            block_id=new_page['id'],
             children=[
+                *create_rich_text_blocks(transcription),
+                {
+                    "object": "block",
+                    "type": "image",
+                    "image": {
+                        "type": "external",
+                        "external": {
+                            "url": image_url
+                        }
+                    }
+                }
+            ]
+        )
+
+        return print(f"Image entry saved to Notion page: {new_page['url']}")
+
+    response_title = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system",
+             "content": "You are an assistant that summarizes journal entries in a couple of sentences maximum. The summary is addressed to them, the user. You just summarize the text, you don't add any other comments to it."},
+            {"role": "user", "content": transcription}
+        ]
+    )
+    summary = response_title.choices[0].message.content
+
+    try:
+        notion.blocks.children.append(
+            [
                 *create_rich_text_blocks(transcription),
                 {
                     "object": "block",
@@ -167,22 +190,6 @@ def save_to_notion(transcription, raw, image_url=None):
             ]
         )
 
-        if image_url:
-            notion.blocks.children.append(
-                block_id=new_page['id'],
-                children=[
-                    {
-                        "object": "block",
-                        "type": "image",
-                        "image": {
-                            "type": "external",
-                            "external": {
-                                "url": image_url
-                            }
-                        }
-                    }
-                ]
-            )
 
         print(f"Journal entry saved to Notion page: {new_page['url']}")
         return True, new_page['url']
@@ -294,6 +301,10 @@ def main():
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
         .concurrent_updates(True)
+        .httpx_client_kwargs(
+            limits=Limits(max_connections=32),
+            timeout = Timeout(connect=10.0, read=10.0, write=10.0, pool=10.0)
+        )
         .build()
     )
 

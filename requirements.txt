@@ -4,6 +4,7 @@ whisperx
 scipy
 notion_client
 python-telegram-bot[job-queue]
+httpx
 ffmpeg-python
 openai
 python-dotenv
