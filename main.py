@@ -9,12 +9,12 @@ import requests
 
 from openai import OpenAI
 from telegram import Update
-from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandler, filters, Updater
+from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandler, filters
 from notion_client import Client
 from notion_client.errors import APIResponseError
 from dotenv import load_dotenv
 
-REMINDER_TIME = time(hour=20, minute=14)
+REMINDER_TIME = time(hour=20, minute=18)
 
 load_dotenv()
 
@@ -57,14 +57,15 @@ notion = Client(auth=NOTION_TOKEN)
 
 
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = context.job.chat_id
     message = "🌟 Daily Reminder"
 
-    updates = await context.bot.get_updates()
-
-    unique_chat_ids = set(update.message.chat_id for update in updates if update.message)
-
-    for chat_id in unique_chat_ids:
+    try:
         await context.bot.send_message(chat_id=chat_id, text=message)
+        print(f"Daily reminder sent to chat_id {chat_id}")
+    except Exception as e:
+        print(f"Error sending daily reminder: {e}")
+
 
 
 def transcribe_audio(audio_file):
@@ -296,31 +297,25 @@ async def start(update):
         "Welcome! Send me a voice message and I'll transcribe it and save it to your Notion journal.")
 
 def main():
-    updater = Updater(
-        TELEGRAM_BOT_TOKEN,
-        request_kwargs={
-            'read_timeout': 10,
-            'connect_timeout': 10,
-            'pool_timeout': 10,
-        },
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .concurrent_updates(True)
+        .build()
     )
 
-    dispatcher = updater.dispatcher
-
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.job_queue.run_daily(
         send_daily_reminder,
         REMINDER_TIME,
         days=(0, 1, 2, 3, 4, 5, 6)
     )
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
-    dispatcher.add_handler(MessageHandler(filters.PHOTO, handle_image))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_image))
 
     print("Bot is running. Send a voice message to transcribe and save to Notion.")
-    updater.start_polling()
-    updater.idle()
+    application.run_polling()
 
 
 if __name__ == "__main__":
