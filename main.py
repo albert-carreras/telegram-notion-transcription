@@ -15,7 +15,7 @@ from notion_client import Client
 from notion_client.errors import APIResponseError
 from dotenv import load_dotenv
 
-REMINDER_TIME = time(hour=19, minute=48)
+REMINDER_TIME = time(hour=19, minute=50)
 
 load_dotenv()
 
