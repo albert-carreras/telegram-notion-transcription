@@ -82,7 +82,9 @@ def transcribe_audio(audio_file):
 
 
 def create_rich_text_blocks(text):
-    chunks = [text[i:i + MAX_NOTION_BLOCK_LENGTH] for i in range(0, len(text), MAX_NOTION_BLOCK_LENGTH)]
+    escaped_text = text.replace("{", "{{").replace("}", "}}")
+
+    chunks = [escaped_text[i:i + MAX_NOTION_BLOCK_LENGTH] for i in range(0, len(escaped_text), MAX_NOTION_BLOCK_LENGTH)]
     return [
         {
             "object": "block",
@@ -165,9 +167,9 @@ def save_to_notion(transcription, image_url=None):
     summary = response_title.choices[0].message.content
 
     try:
+        notion.blocks.children.append(create_rich_text_blocks(transcription))
         notion.blocks.children.append(
             [
-                *create_rich_text_blocks(transcription),
                 {
                     "object": "block",
                     "type": "quote",
@@ -183,7 +185,6 @@ def save_to_notion(transcription, image_url=None):
                 },
             ]
         )
-
 
         print(f"Journal entry saved to Notion page: {new_page['url']}")
         return True, new_page['url']
