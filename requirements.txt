@@ -3,7 +3,7 @@ sounddevice
 whisperx
 scipy
 notion_client
-python-telegram-bot
+python-telegram-bot[job-queue]
 ffmpeg-python
 openai
 python-dotenv
