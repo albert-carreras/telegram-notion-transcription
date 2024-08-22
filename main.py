@@ -167,9 +167,10 @@ def save_to_notion(transcription, image_url=None):
     summary = response_title.choices[0].message.content
 
     try:
-        notion.blocks.children.append(create_rich_text_blocks(transcription))
+        notion.blocks.children.append(block_id=new_page['id'], children=create_rich_text_blocks(transcription))
         notion.blocks.children.append(
-            [
+            block_id=new_page['id'],
+            children=[
                 {
                     "object": "block",
                     "type": "quote",
