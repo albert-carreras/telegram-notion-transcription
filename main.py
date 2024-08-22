@@ -15,7 +15,7 @@ from notion_client import Client
 from notion_client.errors import APIResponseError
 from dotenv import load_dotenv
 
-REMINDER_TIME = time(hour=19, minute=41)
+REMINDER_TIME = time(hour=19, minute=48)
 
 load_dotenv()
 
@@ -60,8 +60,8 @@ notion = Client(auth=NOTION_TOKEN)
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     message = "🌟 Daily Reminder"
 
-    chats = await context.bot.get_updates()
-    unique_chat_ids = set(update.message.chat_id for update in chats if update.message)
+    updates = await context.bot.get_updates(offset=-1)
+    unique_chat_ids = set(update.message.chat_id for update in updates if update.message)
 
     for chat_id in unique_chat_ids:
         await context.bot.send_message(chat_id=chat_id, text=message)
@@ -76,11 +76,16 @@ async def schedule_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
 
     delay = (reminder_time - now).total_seconds()
 
-    await asyncio.sleep(delay)
-    await send_daily_reminder(context)
+    while True:
+        await asyncio.sleep(delay)
+        await send_daily_reminder(context)
 
-    # Schedule the next reminder
-    asyncio.create_task(schedule_daily_reminder(context))
+        # Recalculate delay for the next reminder
+        now = datetime.now()
+        reminder_time = datetime.combine(now.date(), REMINDER_TIME)
+        if now.time() > REMINDER_TIME:
+            reminder_time = reminder_time.replace(day=reminder_time.day + 1)
+        delay = (reminder_time - now).total_seconds()
 
 
 def transcribe_audio(audio_file):
@@ -308,7 +313,13 @@ async def start(update, context):
 
 
 def main():
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .concurrent_updates(True)
+        .httpx_kwargs({"timeout": 60.0})
+        .build()
+    )
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
