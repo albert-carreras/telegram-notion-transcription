@@ -15,7 +15,7 @@ from notion_client import Client
 from notion_client.errors import APIResponseError
 from dotenv import load_dotenv
 
-REMINDER_TIME = time(hour=19, minute=50)
+REMINDER_TIME = time(hour=19, minute=56)
 
 load_dotenv()
 
@@ -60,32 +60,12 @@ notion = Client(auth=NOTION_TOKEN)
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     message = "🌟 Daily Reminder"
 
-    updates = await context.bot.get_updates(offset=-1)
+    updates = await context.bot.get_updates()
+
     unique_chat_ids = set(update.message.chat_id for update in updates if update.message)
 
     for chat_id in unique_chat_ids:
         await context.bot.send_message(chat_id=chat_id, text=message)
-
-
-async def schedule_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now()
-    reminder_time = datetime.combine(now.date(), REMINDER_TIME)
-
-    if now.time() > REMINDER_TIME:
-        reminder_time = reminder_time.replace(day=reminder_time.day + 1)
-
-    delay = (reminder_time - now).total_seconds()
-
-    while True:
-        await asyncio.sleep(delay)
-        await send_daily_reminder(context)
-
-        # Recalculate delay for the next reminder
-        now = datetime.now()
-        reminder_time = datetime.combine(now.date(), REMINDER_TIME)
-        if now.time() > REMINDER_TIME:
-            reminder_time = reminder_time.replace(day=reminder_time.day + 1)
-        delay = (reminder_time - now).total_seconds()
 
 
 def transcribe_audio(audio_file):
@@ -305,12 +285,9 @@ def cleanup_with_gpt4o_mini(text):
     return cleaned_text
 
 
-async def start(update, context):
+async def start(update):
     await update.message.reply_text(
         "Welcome! Send me a voice message and I'll transcribe it and save it to your Notion journal.")
-
-    await asyncio.create_task(schedule_daily_reminder(context))
-
 
 def main():
     application = (
@@ -320,6 +297,12 @@ def main():
         .build()
     )
 
+
+    application.job_queue.run_daily(
+        send_daily_reminder,
+        REMINDER_TIME,
+        days=(0, 1, 2, 3, 4, 5, 6)
+    )
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_image))
