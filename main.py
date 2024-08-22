@@ -14,7 +14,7 @@ from notion_client import Client
 from notion_client.errors import APIResponseError
 from dotenv import load_dotenv
 
-REMINDER_TIME = time(hour=20, minute=18)
+REMINDER_TIME = time(hour=20, minute=21)
 
 load_dotenv()
 
@@ -150,7 +150,8 @@ def save_to_notion(transcription, raw, image_url=None):
             ]
         )
 
-        return print(f"Image entry saved to Notion page: {new_page['url']}")
+        print(f"Image entry saved to Notion page: {new_page['url']}")
+        return True, new_page['url']
 
     response_title = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -292,9 +293,20 @@ def cleanup_with_gpt4o_mini(text):
     return cleaned_text
 
 
-async def start(update):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
     await update.message.reply_text(
         "Welcome! Send me a voice message and I'll transcribe it and save it to your Notion journal.")
+
+    context.job_queue.run_daily(
+        send_daily_reminder,
+        REMINDER_TIME,
+        days=(0, 1, 2, 3, 4, 5, 6),
+        context={"chat_id": chat_id}
+    )
+
+    await update.message.reply_text("Daily reminders have been scheduled!")
 
 def main():
     application = (
