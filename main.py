@@ -14,7 +14,7 @@ from notion_client import Client
 from notion_client.errors import APIResponseError
 from dotenv import load_dotenv
 
-REMINDER_TIME = time(hour=20, minute=24)
+REMINDER_TIME = time(hour=20, minute=26)
 
 load_dotenv()
 
@@ -57,7 +57,8 @@ notion = Client(auth=NOTION_TOKEN)
 
 
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.context
+    job_data = context.job.data
+    chat_id = job_data["chat_id"]
     message = "🌟 Daily Reminder"
 
     try:
@@ -303,7 +304,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         send_daily_reminder,
         REMINDER_TIME,
         days=(0, 1, 2, 3, 4, 5, 6),
-        job_kwargs={'context': chat_id}
+        data={"chat_id": chat_id}
     )
 
     await update.message.reply_text("Daily reminders have been scheduled!")
