@@ -1,6 +1,8 @@
 import os
 import sys
-from datetime import datetime
+import asyncio
+
+from datetime import datetime, time
 from contextlib import contextmanager
 
 import whisperx
@@ -12,6 +14,8 @@ from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandl
 from notion_client import Client
 from notion_client.errors import APIResponseError
 from dotenv import load_dotenv
+
+REMINDER_TIME = time(hour=19, minute=41)
 
 load_dotenv()
 
@@ -53,6 +57,32 @@ with suppress_stdout_stderr():
 notion = Client(auth=NOTION_TOKEN)
 
 
+async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
+    message = "🌟 Daily Reminder"
+
+    chats = await context.bot.get_updates()
+    unique_chat_ids = set(update.message.chat_id for update in chats if update.message)
+
+    for chat_id in unique_chat_ids:
+        await context.bot.send_message(chat_id=chat_id, text=message)
+
+
+async def schedule_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now()
+    reminder_time = datetime.combine(now.date(), REMINDER_TIME)
+
+    if now.time() > REMINDER_TIME:
+        reminder_time = reminder_time.replace(day=reminder_time.day + 1)
+
+    delay = (reminder_time - now).total_seconds()
+
+    await asyncio.sleep(delay)
+    await send_daily_reminder(context)
+
+    # Schedule the next reminder
+    asyncio.create_task(schedule_daily_reminder(context))
+
+
 def transcribe_audio(audio_file):
     audio = whisperx.load_audio(audio_file)
     print("--- Transcribing ---")
@@ -66,7 +96,7 @@ def transcribe_audio(audio_file):
 
 
 def create_rich_text_blocks(text):
-    chunks = [text[i:i+MAX_NOTION_BLOCK_LENGTH] for i in range(0, len(text), MAX_NOTION_BLOCK_LENGTH)]
+    chunks = [text[i:i + MAX_NOTION_BLOCK_LENGTH] for i in range(0, len(text), MAX_NOTION_BLOCK_LENGTH)]
     return [
         {
             "object": "block",
@@ -78,13 +108,14 @@ def create_rich_text_blocks(text):
     ]
 
 
-def save_to_notion(transcription, raw):
+def save_to_notion(transcription, raw, image_url=None):
     now = datetime.now()
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an assistant that generates concise, meaningful titles for journal entries based on their content. It's a journal entry and it will be on a list of many other journal entries, therefore make the title recognizable, don't use words that can be often used with journal entries as this will make the titles repetitive."},
+            {"role": "system",
+             "content": "You are an assistant that generates concise, meaningful titles for journal entries based on their content. It's a journal entry and it will be on a list of many other journal entries, therefore make the title recognizable, don't use words that can be often used with journal entries as this will make the titles repetitive."},
             {"role": "user", "content": transcription}
         ]
     )
@@ -93,7 +124,8 @@ def save_to_notion(transcription, raw):
     response_title = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an assistant that summarizes journal entries in a couple of sentences maximum. The summary is addressed to them, the user. You just summarize the text, you don't add any other comments to it."},
+            {"role": "system",
+             "content": "You are an assistant that summarizes journal entries in a couple of sentences maximum. The summary is addressed to them, the user. You just summarize the text, you don't add any other comments to it."},
             {"role": "user", "content": transcription}
         ]
     )
@@ -102,7 +134,8 @@ def save_to_notion(transcription, raw):
     response_evaluation = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an assistant that evaluates journal entries and gives a sentiment analysis. You just return a number representing your evaluation of the sentiment analysis. You use a scale from 1 to 100 on how positive, happy and optimistic the journal entry is. For reference, a 1 would be when something terrible happened, like a death. A 100 would be when something wonderful happened, like the birth of your first child. A 50 would be a normal, average day, routine, nothing special happened."},
+            {"role": "system",
+             "content": "You are an assistant that evaluates journal entries and gives a sentiment analysis. You just return a number representing your evaluation of the sentiment analysis. You use a scale from 1 to 100 on how positive, happy and optimistic the journal entry is. For reference, a 1 would be when something terrible happened, like a death. A 100 would be when something wonderful happened, like the birth of your first child. A 50 would be a normal, average day, routine, nothing special happened."},
             {"role": "user", "content": transcription}
         ]
     )
@@ -149,6 +182,23 @@ def save_to_notion(transcription, raw):
             ]
         )
 
+        if image_url:
+            notion.blocks.children.append(
+                block_id=new_page['id'],
+                children=[
+                    {
+                        "object": "block",
+                        "type": "image",
+                        "image": {
+                            "type": "external",
+                            "external": {
+                                "url": image_url
+                            }
+                        }
+                    }
+                ]
+            )
+
         print(f"Journal entry saved to Notion page: {new_page['url']}")
         return True, new_page['url']
 
@@ -166,7 +216,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             file = await context.bot.get_file(message.voice.file_id)
             try:
-                response = requests.get(file.file_path, timeout=30)  # 30 seconds timeout
+                response = requests.get(file.file_path, timeout=30)
                 response.raise_for_status()
 
                 with open("input.wav", 'wb') as f:
@@ -202,6 +252,41 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("No voice message detected.")
 
 
+async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    await update.message.reply_text("Processing image...")
+
+    if message.photo:
+        try:
+            file = await context.bot.get_file(message.photo[-1].file_id)
+            image_url = file.file_path
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Describe this image as if it were a journal entry."},
+                            {"type": "image_url", "image_url": {"url": image_url}},
+                        ],
+                    }
+                ],
+            )
+            caption = response.choices[0].message.content
+
+            success, url = save_to_notion(caption, "Image caption", image_url)
+
+            if success:
+                await update.message.reply_text(f"Image processed and saved: {url}")
+            else:
+                await update.message.reply_text("Error saving to Notion. Please check your settings.")
+        except Exception as e:
+            await update.message.reply_text(f"Error processing image: {e}")
+    else:
+        await update.message.reply_text("No image detected.")
+
+
 def cleanup_with_gpt4o_mini(text):
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -219,12 +304,15 @@ async def start(update, context):
     await update.message.reply_text(
         "Welcome! Send me a voice message and I'll transcribe it and save it to your Notion journal.")
 
+    await asyncio.create_task(schedule_daily_reminder(context))
+
 
 def main():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_image))
 
     print("Bot is running. Send a voice message to transcribe and save to Notion.")
     application.run_polling()
